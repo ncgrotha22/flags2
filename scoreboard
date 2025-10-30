@@ -8,10 +8,10 @@
     /* Retro scoreboard styling */
     :root{
       --bg:#0b0b0b;
-      --accent:#fefefe;
+      --accent:#0f0;
       --blackTeamBg:#0b0b0b;
       --whiteTeamBg:#f6f6f6;
-      --border: #c8c8c8;
+      --border: #0f0;
       --retro-font: 'Courier New', monospace;
     }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--accent);font-family:var(--retro-font);}
@@ -92,175 +92,70 @@
   </div>
 
 <script>
-const sheetUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTpIdxq0SCnPly4D7URzwg-z8DaVbrIpI4vb1oPcxR_JVg8klUeSh76w8v260ZttPPK5Y3GDvE6_VYq/pubhtml?gid=749829186&single=true";
-const refreshSeconds = 10;      // auto‑refresh frequency (seconds)
-let timerEnabled = false;       // default: no countdown timer visible
-let timerRemaining = 0;         // seconds
-let timerIntervalId = null;
-let refreshIntervalId = null;
+const sheetUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTpIdxq0SCnPly4D7URzwg-z8DaVbrIpI4vb1oPcxR_JVg8klUeSh76w8v260ZttPPK5Y3GDvE6_VYq/pub?output=csv&gid=749829186";
+const refreshSeconds = 10; // auto-refresh frequency in seconds
 
-/* ======= Simple CSV parser (handles quoted fields) ====== */
-function parseCSV(text){
-  const rows = [];
-  let cur = '';
-  let row = [];
-  let inQuotes = false;
-  for(let i=0;i<text.length;i++){
-    const ch = text[i];
-    const nxt = text[i+1];
-    if(ch === '"' ){
-      if(inQuotes && nxt === '"'){ // escaped quote
-        cur += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if(ch === ',' && !inQuotes){
-      row.push(cur);
-      cur = '';
-    } else if((ch === '\n' || ch === '\r') && !inQuotes){
-      if(ch === '\r' && text[i+1] === '\n'){ continue; }
-      row.push(cur);
-      cur = '';
-      if(row.length > 1 || row[0] !== '') rows.push(row);
-      row = [];
-    } else {
-      cur += ch;
-    }
-  }
-  if(cur !== '' || row.length>0){
-    row.push(cur);
-    if(row.length > 1 || row[0] !== '') rows.push(row);
-  }
-  return rows;
-}
-
-function mapHeaders(headerRow){
-  const map = {};
-  headerRow.forEach((h,i)=>{
-    const key = (h||'').toString().trim().toLowerCase();
-    map[key] = i;
-  });
-  return map;
-}
-
-async function loadAndRender(){
+async function loadAndRender() {
   try {
-    const resp = await fetch(sheetUrl, {cache: "no-store"});
-    if(!resp.ok) throw new Error("Failed to fetch sheet (HTTP " + resp.status + ")");
+    const resp = await fetch(sheetUrl, {cache:"no-store"});
+    if(!resp.ok) throw new Error("Failed to fetch sheet");
     const txt = await resp.text();
-    const rows = parseCSV(txt);
-    if(rows.length < 1) throw new Error("CSV is empty");
+    const rows = txt.trim().split("\n").map(r=>r.split(","));
+    if(rows.length<2) throw new Error("No data found");
 
-    const header = rows[0].map(h=>h.trim());
-    const hmap = mapHeaders(header);
+    const header = rows[0].map(h=>h.trim().toLowerCase());
+    const idxGamer = header.indexOf("gamer tag");
+    const idxTeam = header.indexOf("what team are you on?");
+    const idxFlags = header.indexOf("flags captured");
 
-    const gamerKeys = ["gamer tag","gamertag","player","player name","name"];
-    const teamKeys = ["team","what team are you on?","what team","team name"];
-    const flagsKeys = ["flags captured","score","flags","flags captured "];
+    const data = rows.slice(1).map(r=>{
+      return {
+        gamer: r[idxGamer] || "",
+        team: r[idxTeam] || "",
+        flags: parseInt(r[idxFlags]||"0")||0
+      };
+    });
 
-    function findIndex(possibleKeys){
-      for(const k of possibleKeys){
-        if(hmap[k] !== undefined) return hmap[k];
-      }
-      for(const hh in hmap){
-        for(const k of possibleKeys){
-          if(hh.indexOf(k) !== -1) return hmap[hh];
-        }
-      }
-      return -1;
-    }
+    data.sort((a,b)=>b.flags-a.flags);
 
-    const idxGamer = findIndex(gamerKeys);
-    const idxTeam = findIndex(teamKeys);
-    const idxFlags = findIndex(flagsKeys);
-
-    const data = [];
-    for(let r=1;r<rows.length;r++){
-      const row = rows[r];
-      if(row.length === 0) continue;
-      let gamer = idxGamer >=0 ? row[idxGamer] : (row[0] || "");
-      let team = idxTeam >=0 ? row[idxTeam] : (row[1] || "");
-      let flags = idxFlags >=0 ? row[idxFlags] : (row[2] || "0");
-      gamer = (gamer||"").trim();
-      team = (team||"").trim();
-      flags = parseInt((flags||"0").toString().replace(/[^0-9]/g,'')) || 0;
-      if(gamer !== "") data.push({gamer, team, flags});
-    }
-
-    if(data.length === 0 && rows.length>1){
-      for(let r=1;r<rows.length;r++){
-        const row = rows[r];
-        let numericIdx = row.findIndex(cell=>/^\s*\d+\s*$/.test(cell));
-        if(numericIdx === -1) numericIdx = row.findIndex(cell=>/\d/.test(cell));
-        const gamer = row[0] || "";
-        const team = row[1] || "";
-        const flags = numericIdx>=0 ? parseInt(row[numericIdx]) || 0 : 0;
-        if((gamer||"").trim()!=="") data.push({gamer: gamer.trim(), team: team.trim(), flags});
-      }
-    }
-
-    data.sort((a,b)=> b.flags - a.flags || a.gamer.localeCompare(b.gamer));
-
-    const blackTotal = data.reduce((s, item)=> s + (item.team.toLowerCase().includes("black")? item.flags:0), 0);
-    const whiteTotal = data.reduce((s, item)=> s + (item.team.toLowerCase().includes("white")? item.flags:0), 0);
+    const blackTotal = data.filter(x=>x.team.toLowerCase().includes("black")).reduce((s,x)=>s+x.flags,0);
+    const whiteTotal = data.filter(x=>x.team.toLowerCase().includes("white")).reduce((s,x)=>s+x.flags,0);
     document.getElementById("blackScore").textContent = blackTotal;
     document.getElementById("whiteScore").textContent = whiteTotal;
 
-    const leaderEl = document.getElementById("leaderText");
-    if(blackTotal > whiteTotal) leaderEl.textContent = "⚫ BLACK is in the lead!";
-    else if(whiteTotal > blackTotal) leaderEl.textContent = "⚪ WHITE is in the lead!";
-    else leaderEl.textContent = "It’s a tie!";
+    const leaderText = document.getElementById("leaderText");
+    if(blackTotal>whiteTotal) leaderText.textContent="⚫ BLACK is in the lead!";
+    else if(whiteTotal>blackTotal) leaderText.textContent="⚪ WHITE is in the lead!";
+    else leaderText.textContent="It’s a tie!";
 
     const tbody = document.getElementById("leaderBody");
     tbody.innerHTML = "";
-    if(data.length === 0){
-      tbody.innerHTML = '<tr><td colspan="4" style="opacity:0.6">No players yet</td></tr>';
-    } else {
-      data.forEach((row, idx)=>{
-        const tr = document.createElement("tr");
-        if(idx === 0) tr.classList.add("leader");
-        const rankCell = `<td class="rank-cell">${idx+1}</td>`;
-        const gamerCell = `<td>${escapeHtml(row.gamer)}</td>`;
-        const teamClass = row.team.toLowerCase().includes("black") ? "team-pill black" : "team-pill white";
-        const teamCell = `<td><span class="${teamClass}">${escapeHtml(row.team||"")}</span></td>`;
-        const flagsCell = `<td>${row.flags}</td>`;
-        tr.innerHTML = rankCell + gamerCell + teamCell + flagsCell;
-        tbody.appendChild(tr);
-      });
-    }
+    data.forEach((row,i)=>{
+      const tr = document.createElement("tr");
+      if(i===0) tr.style.background="rgba(255,255,255,0.05)";
+      const teamClass = row.team.toLowerCase().includes("black")?"team-pill black":"team-pill white";
+      tr.innerHTML=`<td class="rank-cell">${i+1}</td>
+                    <td>${row.gamer}</td>
+                    <td><span class="${teamClass}">${row.team}</span></td>
+                    <td>${row.flags}</td>`;
+      tbody.appendChild(tr);
+    });
 
   } catch(err){
     console.error(err);
-    const tbody = document.getElementById("leaderBody");
-    tbody.innerHTML = `<tr><td colspan="4" style="opacity:0.6">Error loading data: ${escapeHtml(err.message)}</td></tr>`;
-    document.getElementById("leaderText").textContent = "Error loading scores";
+    document.getElementById("leaderBody").innerHTML=`<tr><td colspan="4" style="opacity:0.6">Error loading data</td></tr>`;
+    document.getElementById("leaderText").textContent="Error loading scores";
   }
 }
 
-function escapeHtml(s){ return (s||"").toString().replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-
-document.getElementById("refreshBtn").addEventListener("click", ()=> loadAndRender());
+document.getElementById("refreshBtn").addEventListener("click", ()=>loadAndRender());
 document.getElementById("fullscreenBtn").addEventListener("click", ()=>{
-  const el = document.documentElement;
-  if(!document.fullscreenElement) el.requestFullscreen?.();
-  else document.exitFullscreen?.();
+  if(!document.fullscreenElement) document.documentElement.requestFullscreen();
+  else document.exitFullscreen();
 });
 
 loadAndRender();
-refreshIntervalId = setInterval(loadAndRender, refreshSeconds * 1000);
-document.getElementById("refreshIntervalLabel").textContent = refreshSeconds.toString();
-
-(function checkQueryTimer(){
-  const params = new URLSearchParams(window.location.search);
-  const t = params.get('timer');
-  if(t){
-    const minutes = parseInt(t);
-    if(!isNaN(minutes) && minutes>0){
-      startTimer(minutes*60);
-    }
-  }
-})();
+setInterval(loadAndRender, refreshSeconds*1000);
 </script>
 </body>
 </html>
